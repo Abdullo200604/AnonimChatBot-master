@@ -6,13 +6,13 @@ from models.user import User
 from states.anonim_state import AnonimState
 from aiogram.fsm.context import FSMContext
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 router = Router()
 active_connections = {}
 waiting_users = set()
 
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 @router.message(AnonimState.anonim_id)
