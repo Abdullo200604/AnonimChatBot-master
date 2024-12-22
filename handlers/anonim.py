@@ -6,14 +6,12 @@ from models.user import User
 from states.anonim_state import AnonimState
 from aiogram.fsm.context import FSMContext
 
-router = Router()
-active_connections = {}
-waiting_users = set()
-
-
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+router = Router()
+active_connections = {}
+waiting_users = set()
 
 @router.message(AnonimState.anonim_id)
 async def update_anonim_id(message: Message, state: FSMContext, bot: Bot):
@@ -41,6 +39,36 @@ async def update_anonim_id(message: Message, state: FSMContext, bot: Bot):
         await message.answer("<b>Bunday foydalanuvchi mavjud emas.</b>")
         await state.clear()
 
+@router.callback_query(F.data.startswith("block_"))
+async def block_connection(callback: CallbackQuery):
+    requester_id = int(callback.data.split("_")[1])  # The ID of the requester (initiator of the connection)
+
+    # Send rejection message to the requester
+    try:
+        await router.bot.send_message(
+            chat_id=requester_id,
+            text="<b>Foydalanuvchi siz bilan suhbatlashishni rad etdi.</b>"
+        )
+    except Exception as e:
+        await callback.message.answer("<b>Rad etilganligi haqida xabar yuborishda xatolik yuz berdi.</b>")
+
+    # Update callback message text
+    await callback.message.edit_text("<b>Siz ulanishni rad etdingiz.</b>")
+
+    # Disconnect users
+    responder_id = callback.from_user.id  # The ID of the responder (the one who blocked the request)
+
+    if requester_id in active_connections:
+        del active_connections[requester_id]
+    if responder_id in active_connections:
+        del active_connections[responder_id]
+
+    # Remove both users from the waiting queue if they are there
+    if requester_id in waiting_users:
+        waiting_users.remove(requester_id)
+    if responder_id in waiting_users:
+        waiting_users.remove(responder_id)
+
 
 @router.callback_query(F.data.startswith("accept_"))
 async def accept_connection(callback: CallbackQuery):
@@ -58,34 +86,14 @@ async def accept_connection(callback: CallbackQuery):
         text="<b>Ulanish tasdiqlandi ✅. Endi suhbatni boshlashingiz mumkin!</b>"
     )
 
-
-@router.callback_query(F.data.startswith("block_"))
-async def block_connection(callback: CallbackQuery):
-    requester_id = int(callback.data.split("_")[1])
-
-    # Rad etilganligi haqida xabar yuborish
-    try:
-        await router.bot.send_message(
-            chat_id=requester_id,
-            text="<b>Foydalanuvchi siz bilan suhbatlashishni rad etdi.</b>"
-        )
-    except Exception as e:
-        await callback.message.answer("<b>Rad etilganligi haqida xabar yuborishda xatolik yuz berdi.</b>")
-
-    # Callback xabarini yangilash
-    await callback.message.edit_text("<b>Siz ulanishni rad etdingiz.</b>")
-
-
 @router.callback_query(F.data == "anonim")
 async def anonim_stage(callback: CallbackQuery):
     await callback.message.edit_text("<b>Tanlang: </b>", reply_markup=keyboard_anonim.as_markup())
-
 
 @router.callback_query(F.data == "connect_id")
 async def anonim_id_connect(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("<b>Id kiriting:</b>")
     await state.set_state(AnonimState.anonim_id)
-
 
 @router.message(AnonimState.anonim_id)
 async def update_anonim_id(message: Message, state: FSMContext):
@@ -104,7 +112,6 @@ async def update_anonim_id(message: Message, state: FSMContext):
     else:
         await message.answer("<b>Bunday foydalanuvchi mavjud emas.</b>")
         await state.clear()
-
 
 @router.callback_query(F.data == "connect_random")
 async def random_button(callback: CallbackQuery):
@@ -126,7 +133,6 @@ async def random_button(callback: CallbackQuery):
         # Navbatga qo‘shish
         waiting_users.add(user_id)
         await callback.message.answer("<b>Random foydalanuvchi topilmoqda, iltimos kuting...</b>")
-
 
 @router.message(F.text)
 async def handle_messages(message: Message, bot: Bot):
