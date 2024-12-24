@@ -14,30 +14,42 @@ active_connections = {}
 waiting_users = set()
 
 @router.message(AnonimState.anonim_id)
-async def update_anonim_id(message: Message, state: FSMContext, bot: Bot):
-    await state.update_data(anonim_id=message.text)
-    data = await state.get_data()
-    user_id = data.get("anonim_id", "Unknown")
-    user_id_check = await User.get_or_none(user_id=user_id)
+async def handle_anonim_message(message: Message, state: FSMContext):
+    # Bu yerda faqat anonim chat bo'limida ishlaydi
+    pass
 
-    if user_id_check:
-        # Tasdiqlash va bloklash uchun tugmalar
-        keyboard = InlineKeyboardBuilder()
-        keyboard.button(text="✅ Tasdiqlash", callback_data=f"accept_{message.from_user.id}")
-        keyboard.button(text="❌ Bloklash", callback_data=f"block_{message.from_user.id}")
-        keyboard = keyboard.as_markup()
+@router.message()
+async def handle_non_anonim_message(message: Message, state: FSMContext):
+    user_state = await state.get_state()
+    if user_state != AnonimState.anonim_id:
+        # Bu yerda anonim bo'limda bo'lmagan xabarlar ishlaydi
+        receiver_id = active_connections.get(message.from_user.id)
 
-        # So‘rov qilingan foydalanuvchiga xabar yuborish
-        await bot.send_message(
-            chat_id=int(user_id),
-            text="<b>Anonim foydalanuvchi siz bilan suhbatlashmoqchi. Tasdiqlaysizmi?</b>",
-            reply_markup=keyboard
+        if receiver_id:
+            try:
+                await message.bot.send_message(chat_id=receiver_id, text=message.text)
+            except Exception as e:
+                await message.answer("<b>Xabar yuborishda xatolik yuz berdi.</b>")
+        else:
+            await message.answer("<b>Siz hali hech kim bilan ulanmagansiz.</b>")
+
+@router.callback_query(F.data.startswith("accept_"))
+async def accept_connection(callback: CallbackQuery, state: FSMContext):
+    user_state = await state.get_state()
+    if user_state == AnonimState.anonim_id:
+        requester_id = int(callback.data.split("_")[1])
+        responder_id = callback.from_user.id
+
+        # Ulash jarayoni
+        active_connections[requester_id] = responder_id
+        active_connections[responder_id] = requester_id
+
+        # Tasdiqlash haqida xabar berish
+        await callback.message.edit_text("<b>Siz ulanishni tasdiqladingiz. Endi suhbatlashishingiz mumkin!</b>")
+        await callback.bot.send_message(
+            chat_id=requester_id,
+            text="<b>Ulanish tasdiqlandi ✅. Endi suhbatni boshlashingiz mumkin!</b>"
         )
-        await message.answer("<b>Foydalanuvchiga so‘rov yuborildi. Javobni kuting...</b>")
-        await state.clear()
-    else:
-        await message.answer("<b>Bunday foydalanuvchi mavjud emas.</b>")
-        await state.clear()
 
 @router.callback_query(F.data.startswith("block_"))
 async def block_connection(callback: CallbackQuery):
@@ -45,7 +57,7 @@ async def block_connection(callback: CallbackQuery):
 
     # Send rejection message to the requester
     try:
-        await router.bot.send_message(
+        await callback.bot.send_message(
             chat_id=requester_id,
             text="<b>Foydalanuvchi siz bilan suhbatlashishni rad etdi.</b>"
         )
@@ -69,22 +81,10 @@ async def block_connection(callback: CallbackQuery):
     if responder_id in waiting_users:
         waiting_users.remove(responder_id)
 
-
-@router.callback_query(F.data.startswith("accept_"))
-async def accept_connection(callback: CallbackQuery):
-    requester_id = int(callback.data.split("_")[1])
-    responder_id = callback.from_user.id
-
-    # Ulash jarayoni
-    active_connections[requester_id] = responder_id
-    active_connections[responder_id] = requester_id
-
-    # Tasdiqlash haqida xabar berish
-    await callback.message.edit_text("<b>Siz ulanishni tasdiqladingiz. Endi suhbatlashishingiz mumkin!</b>")
-    await router.bot.send_message(
-        chat_id=requester_id,
-        text="<b>Ulanish tasdiqlandi ✅. Endi suhbatni boshlashingiz mumkin!</b>"
-    )
+@router.callback_query(F.data == "exit_anonim")
+async def exit_anonim(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer("<b>Anonim bo'limdan chiqdingiz.</b>")
 
 @router.callback_query(F.data == "anonim")
 async def anonim_stage(callback: CallbackQuery):
@@ -128,20 +128,39 @@ async def random_button(callback: CallbackQuery):
         active_connections[partner_id] = user_id
 
         await callback.message.answer("<b>Random foydalanuvchi topildi ✅ Endi yozishingiz mumkin!</b>")
-        await router.bot.send_message(chat_id=partner_id, text="<b>Random foydalanuvchi topildi ✅ Endi yozishingiz mumkin!</b>")
+        await callback.bot.send_message(chat_id=partner_id, text="<b>Random foydalanuvchi topildi ✅ Endi yozishingiz mumkin!</b>")
     else:
         # Navbatga qo‘shish
         waiting_users.add(user_id)
         await callback.message.answer("<b>Random foydalanuvchi topilmoqda, iltimos kuting...</b>")
 
-@router.message(F.text)
-async def handle_messages(message: Message, bot: Bot):
-    receiver_id = active_connections.get(message.from_user.id)
 
-    if receiver_id:
-        try:
-            await bot.send_message(chat_id=int(receiver_id), text=message.text)
-        except Exception as e:
-            await message.answer("<b>Xabar yuborishda xatolik yuz berdi.</b>")
+@router.message()
+async def handle_non_anonim_message(message: Message, state: FSMContext):
+    # Foydalanuvchining hozirgi holatini olish
+    user_state = await state.get_state()
+
+    # Foydalanuvchi anonim holatda emasligini tekshirish
+    if user_state != AnonimState.anonim_id:
+        # Agar foydalanuvchi anonim holatda bo'lmasa
+        receiver_id = active_connections.get(message.from_user.id)
+
+        # Agar foydalanuvchi hali hech kim bilan ulanmagan bo'lsa
+        if not receiver_id:
+            await message.answer("<b>Siz hali hech kim bilan ulanmagansiz.</b>")
+        else:
+            # Agar foydalanuvchi ulanishda bo'lsa, xabarni yuborish
+            try:
+                await message.bot.send_message(chat_id=receiver_id, text=message.text)
+            except Exception as e:
+                await message.answer("<b>Xabar yuborishda xatolik yuz berdi.</b>")
     else:
-        await message.answer("<b>Siz hali hech kim bilan ulanmagansiz.</b>")
+        # Agar foydalanuvchi anonim holatda bo'lsa, uning xabarini yuborish
+        receiver_id = active_connections.get(message.from_user.id)
+        if receiver_id:
+            try:
+                await message.bot.send_message(chat_id=receiver_id, text=message.text)
+            except Exception as e:
+                await message.answer("<b>Xabar yuborishda xatolik yuz berdi.</b>")
+        else:
+            await message.answer("<b>Siz hali hech kim bilan ulanmagansiz.</b>")
